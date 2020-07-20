@@ -1,5 +1,8 @@
 #include "envoy/extensions/filters/http/dynamic_forward_proxy/v3/dynamic_forward_proxy.pb.h"
 
+#include "envoy/config/cluster/v3/cluster.pb.h"
+
+#include "extensions/clusters/well_known_names.h"
 #include "extensions/common/dynamic_forward_proxy/dns_cache_impl.h"
 #include "extensions/filters/http/dynamic_forward_proxy/proxy_filter.h"
 #include "extensions/filters/http/well_known_names.h"
@@ -14,12 +17,15 @@ using testing::AtLeast;
 using testing::Eq;
 using testing::InSequence;
 using testing::Return;
+using testing::ReturnRef;
 
 namespace Envoy {
 namespace Extensions {
 namespace HttpFilters {
 namespace DynamicForwardProxy {
 namespace {
+
+using CustomClusterType = envoy::config::cluster::v3::Cluster::CustomClusterType;
 
 using LoadDnsCacheEntryStatus = Common::DynamicForwardProxy::DnsCache::LoadDnsCacheEntryStatus;
 using MockLoadDnsCacheEntryResult =
@@ -72,12 +78,23 @@ public:
 
 // Default port 80 if upstream TLS not configured.
 TEST_F(ProxyFilterTest, HttpDefaultPort) {
+  CustomClusterType cluster_type;
+  cluster_type.set_name(Envoy::Extensions::Clusters::ClusterTypes::get().DynamicForwardProxy);
+  absl::optional<CustomClusterType> cluster_type_option(cluster_type);
+
   Upstream::ResourceAutoIncDec* circuit_breakers_(
       new Upstream::ResourceAutoIncDec(pending_requests_));
+
   InSequence s;
 
   EXPECT_CALL(callbacks_, route());
-  EXPECT_CALL(cm_, get(_));
+  EXPECT_CALL(cm_, get(_))
+      .WillOnce(Return(&cm_.thread_local_cluster_));
+  EXPECT_CALL(cm_.thread_local_cluster_, info())
+      .WillOnce(Return(cm_.thread_local_cluster_.cluster_.info_));
+  EXPECT_CALL(*cm_.thread_local_cluster_.cluster_.info_, clusterType())
+      .WillOnce(ReturnRef(cluster_type_option));
+
   EXPECT_CALL(*dns_cache_manager_->dns_cache_, canCreateDnsRequest_(_))
       .WillOnce(Return(circuit_breakers_));
   EXPECT_CALL(*transport_socket_factory_, implementsSecureTransport()).WillOnce(Return(false));
